@@ -222,6 +222,10 @@ def normalize_image_numpy(image: np.ndarray, resize: bool = True) -> np.ndarray:
         - The image is normalized using the mean and standard deviation values from the ImageNet dataset.
         - The resulting image is transposed to have dimensions of 3 x H x W.
     """
+    # Ensure the image is in H x W x 3 format
+    if image.shape[0] == 3:  # If channels are in the first dimension
+        image = np.transpose(image, (1, 2, 0))  # Transpose to H x W x 3
+        
     if resize:
         image = cv2.resize(image, (224, 224))
     mean = np.array([0.485, 0.456, 0.406])
