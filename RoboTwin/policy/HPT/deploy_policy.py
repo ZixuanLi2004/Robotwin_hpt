@@ -18,11 +18,11 @@ def encode_obs(observation, instruction):
         if "head_camera" in cams and "rgb" in cams["head_camera"]:
             img = cams["head_camera"]["rgb"]
             obs["image"] = np.moveaxis(img, -1, 0) / 255.0
-        if "right_camera" in cams and "rgb" in cams["right_camera"]:
-            img = cams["right_camera"]["rgb"]
-            obs["image1"] = np.moveaxis(img, -1, 0) / 255.0
         if "left_camera" in cams and "rgb" in cams["left_camera"]:
             img = cams["left_camera"]["rgb"]
+            obs["image1"] = np.moveaxis(img, -1, 0) / 255.0
+        if "right_camera" in cams and "rgb" in cams["right_camera"]:
+            img = cams["right_camera"]["rgb"]
             obs["image2"] = np.moveaxis(img, -1, 0) / 255.0
     obs["language_instruction"] = instruction
     return OrderedDict(obs)

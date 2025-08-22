@@ -415,18 +415,19 @@ def convert_dataset_robotwin(task_name, task_config, episode_num):
                 camera_img = cv2.imdecode(np.frombuffer(camera_bits, np.uint8), cv2.IMREAD_COLOR)
                 camera_resized = cv2.resize(camera_img, (224, 224))
                 observation["image"] = camera_resized.astype(np.float32)
+
+            if "left_camera" in image_dict:
+                camera_bits = image_dict["left_camera"][j]
+                camera_img = cv2.imdecode(np.frombuffer(camera_bits, np.uint8), cv2.IMREAD_COLOR)
+                camera_resized = cv2.resize(camera_img, (224, 224))
+                observation["image1"] = camera_resized.astype(np.float32)
             
             if "right_camera" in image_dict:
                 camera_bits = image_dict["right_camera"][j]
                 camera_img = cv2.imdecode(np.frombuffer(camera_bits, np.uint8), cv2.IMREAD_COLOR)
                 camera_resized = cv2.resize(camera_img, (224, 224))
-                observation["image1"] = camera_resized.astype(np.float32)
-            
-            if "left_camera" in image_dict:
-                camera_bits = image_dict["left_camera"][j]
-                camera_img = cv2.imdecode(np.frombuffer(camera_bits, np.uint8), cv2.IMREAD_COLOR)
-                camera_resized = cv2.resize(camera_img, (224, 224))
                 observation["image2"] = camera_resized.astype(np.float32)
+            
             
             # Create step dict (HPT format)
             step = OrderedDict({
