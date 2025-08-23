@@ -14,8 +14,8 @@ from hpt.utils.warmup_lr_wrapper import WarmupLR
 from tqdm import trange
 from hpt.train_test import test 
 
-MAX_EPOCHS = 1000
-TEST_FREQ = 10
+MAX_EPOCHS = 2000
+TEST_FREQ = 100
 MODEL_SAVING_FREQ = 200
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
@@ -75,7 +75,7 @@ def main(cfg: OmegaConf):
     )
 
     # Define device
-    gpu_id = 6
+    gpu_id = 4
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
@@ -124,32 +124,48 @@ def main(cfg: OmegaConf):
     policy_path = os.path.join(cfg.output_dir, "model.pth")
     print(f"Epoch size: {epoch_size} Traj: {cfg.total_num_traj} Train: {len(dataset)} Test: {len(val_dataset)}")
 
+    # 设置模型为训练模式
+    policy.train()
+
     pbar = trange(MAX_EPOCHS, position=0)
     for epoch in pbar:
+        # 确保在每个epoch开始时模型处于训练模式
+        policy.train()
+        
         for batch in train_loader:
-            # Ensure all tensors are on the same device
+            # 确保所有张量都在同一设备上
             batch["data"] = {k: v.to(device).float() for k, v in batch["data"].items()}
             loss = policy.compute_loss(batch)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+        
         scheduler.step()
         wandb.log({"train/loss": loss.item(), "epoch": epoch})
-        print(f"Epoch {epoch} finished. Loss: {loss.item():.4f}")
+        print(f"Epoch {epoch} finished. Loss: {loss.item():.5f}")
 
         if epoch % TEST_FREQ == 0:
-            test_loss = test(policy, device, test_loader, epoch)  # Use the imported test function
+            # 切换到评估模式进行测试
+            policy.eval()
+            test_loss = test(policy, device, test_loader, epoch)
             wandb.log({"validate/epoch": epoch, f"validate/{domain_name}_test_loss": test_loss})
-            print(f"Epoch {epoch}. Test loss: {test_loss:.4f}")
+            print(f"Epoch {epoch}. Test loss: {test_loss:.5f}")
+            # 测试完成后切换回训练模式
+            policy.train()
 
         if (epoch + 1) % MODEL_SAVING_FREQ == 0:
+            # 保存模型时使用eval模式确保一致性
+            policy.eval()
             torch.save(policy.state_dict(), policy_path)
             print(f"Model saved to {policy_path}")
+            # 保存后切换回训练模式
+            policy.train()
 
         # if (epoch + 1) * len(train_loader) > cfg.train.total_iters:
         #     break
 
-    # 6. Save model
+    # 6. Save final model
+    policy.eval()  # 最终保存时使用评估模式
     torch.save(policy.state_dict(), policy_path)
     print("Training completed. Model saved.")
 
