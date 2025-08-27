@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), 'HPT'
 from hpt.utils import utils
 from hpt import train_test
 from collections import OrderedDict
+import cv2
 
 def encode_obs(observation, instruction):
     obs = {}
@@ -17,13 +18,16 @@ def encode_obs(observation, instruction):
         cams = observation["observation"]
         if "head_camera" in cams and "rgb" in cams["head_camera"]:
             img = cams["head_camera"]["rgb"]
-            obs["image"] = np.moveaxis(img, -1, 0) / 255.0
+            camera_resized = cv2.resize(img, (224, 224))
+            obs["image"] = camera_resized.astype(np.float32)
         if "left_camera" in cams and "rgb" in cams["left_camera"]:
             img = cams["left_camera"]["rgb"]
-            obs["image1"] = np.moveaxis(img, -1, 0) / 255.0
+            camera_resized = cv2.resize(img, (224, 224))
+            obs["image1"] = camera_resized.astype(np.float32)
         if "right_camera" in cams and "rgb" in cams["right_camera"]:
             img = cams["right_camera"]["rgb"]
-            obs["image2"] = np.moveaxis(img, -1, 0) / 255.0
+            camera_resized = cv2.resize(img, (224, 224))
+            obs["image2"] = camera_resized.astype(np.float32)
     obs["language_instruction"] = instruction
     return OrderedDict(obs)
 
@@ -64,5 +68,4 @@ def eval(TASK_ENV, policy, observation):
     TASK_ENV.take_action(action, action_type='qpos')
 
 def reset_model(policy):
-    if hasattr(policy, "reset"):
-        policy.reset()
+    policy.reset()

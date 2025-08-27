@@ -12,11 +12,13 @@ from hpt.models.policy import Policy
 from hpt.utils import utils
 from hpt.utils.warmup_lr_wrapper import WarmupLR
 from tqdm import trange
-from hpt.train_test import test 
+from hpt.train_test import train
+from hpt.train_test import test
 
-MAX_EPOCHS = 2000
-TEST_FREQ = 100
-MODEL_SAVING_FREQ = 200
+
+MAX_EPOCHS = 1000
+TEST_FREQ = 10
+MODEL_SAVING_FREQ = 10
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
@@ -26,8 +28,49 @@ def get_dataset(cfg):
         return convert_dataset_robotwin_cached(
             cfg.task_name, cfg.task_config, cfg.episode_num, use_cache=cfg.get("use_cache", True)
         )
-    dataset_args["env_rollout_fn"] = env_rollout_fn()
+    dataset_args["env_rollout_fn"] = env_rollout_fn
     return LocalTrajDataset(**dataset_args)
+
+def init_policy(cfg, dataset, domain, device):
+    pretrained_exists = len(cfg.train.pretrained_dir) > len("output/") and os.path.exists(
+        os.path.join(cfg.train.pretrained_dir, f"trunk.pth")
+    )
+
+    if pretrained_exists:
+        print("load pretrained trunk config")
+        pretrained_cfg = OmegaConf.load(cfg.train.pretrained_dir + "/config.yaml")
+        pretrained_cfg = OmegaConf.structured(pretrained_cfg)
+        pretrained_cfg.network["_target_"] = "hpt.models.policy.Policy"
+        policy = hydra.utils.instantiate(pretrained_cfg.network).to(device)
+        print("load trunk from local disk")
+    elif "hf" in cfg.train.pretrained_dir:
+        policy = Policy.from_pretrained(cfg.train.pretrained_dir)
+        print("load trunk from cloud")
+    else:
+        policy = hydra.utils.instantiate(cfg.network).to(device)
+        print("train from scratch!!!")
+
+    utils.update_network_dim(cfg, dataset, policy)
+    policy.init_domain_stem(domain, cfg.stem)
+    normalizer = dataset.get_normalizer()
+    policy.init_domain_head(domain, normalizer, cfg.head)
+
+    if cfg.network.finetune_encoder:
+        utils.get_image_embeddings(np.zeros((320, 240, 3), dtype=np.uint8), cfg.dataset.image_encoder)
+        from hpt.utils.utils import global_language_model, global_vision_model
+        policy.init_encoders("image", global_vision_model)
+    
+    policy.finalize_modules()
+    if pretrained_exists:
+        policy.load_trunk(os.path.join(cfg.train.pretrained_dir, f"trunk.pth"))
+
+    if cfg.train.freeze_trunk:
+        policy.freeze_trunk()
+        print("trunk frozen")
+
+    policy.print_model_stats()
+    policy.to(device)
+    return policy
 
 @hydra.main(
     version_base=None,
@@ -36,10 +79,11 @@ def get_dataset(cfg):
 )
 def main(cfg: OmegaConf):
     # 1. Initialize wandb
+    date = cfg.output_dir.split("/")[1] if "/" in cfg.output_dir else "unknown_date"
     run = wandb.init(
         project="hpt-transfer",
         tags=[cfg.get("wb_tag", "default")],
-        name=f"{cfg.get('script_name', 'hpt_train')}",
+        name=f"{date}_{cfg.get('script_name', 'hpt_train')}",
         config=OmegaConf.to_container(cfg, resolve=True),
         reinit=False,
         save_code=False,
@@ -66,50 +110,18 @@ def main(cfg: OmegaConf):
         num_workers=cfg.val_dataloader.num_workers,
         pin_memory=cfg.val_dataloader.pin_memory,
     )
-    normalizer = dataset.get_normalizer()
 
     # 3. Initialize model
-    domain_name = cfg.get("domains", "Robotwin")
-    pretrained_exists = len(cfg.train.pretrained_dir) > len("output/") and os.path.exists(
-        os.path.join(cfg.train.pretrained_dir, f"trunk.pth")
-    )
-
+    domain_list = [d.strip() for d in cfg.domains.split(",")]
+    domain = domain_list[0]
+    
     # Define device
     gpu_id = 4
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(f"Using device: {device}")
-
-    if pretrained_exists:
-        print("load pretrained trunk config")
-        pretrained_cfg = OmegaConf.load(cfg.train.pretrained_dir + "/config.yaml")
-        pretrained_cfg = OmegaConf.structured(pretrained_cfg)
-        pretrained_cfg.network["_target_"] = "hpt.models.policy.Policy"
-        policy = hydra.utils.instantiate(pretrained_cfg.network).to(device)
-        print("load trunk from local disk")
-    elif "hf" in cfg.train.pretrained_dir:
-        policy = Policy.from_pretrained(cfg.train.pretrained_dir)
-        policy.to(device)  # Ensure the model is on the correct device
-        print("load trunk from cloud")
-    else:
-        policy = hydra.utils.instantiate(cfg.network).to(device)
-        print("train from scratch!!!")
-
-    utils.update_network_dim(cfg, dataset, policy)
-    policy.init_domain_stem(domain_name, cfg.stem)
-    policy.init_domain_head(domain_name, normalizer, cfg.head)
-    policy.finalize_modules()
-
-    if pretrained_exists:
-        policy.load_trunk(os.path.join(cfg.train.pretrained_dir, f"trunk.pth"))
-        policy.to(device)  # Ensure the model is on the correct device after loading
-
-    if cfg.train.freeze_trunk:
-        for param in policy.trunk.parameters():
-            param.requires_grad = False
-        print("trunk frozen")
-
-    policy.print_model_stats()
+    
+    policy = init_policy(cfg, dataset, domain, device)
 
     # 4. Optimizer and scheduler
     optimizer = utils.get_optimizer(cfg.optimizer, policy, cfg.optimizer_misc)
@@ -118,58 +130,42 @@ def main(cfg: OmegaConf):
     scheduler = WarmupLR(scheduler, init_lr=0, num_warmup=cfg.warmup_lr.step, warmup_strategy="linear")
 
     # 5. Training main loop
+    utils.save_args_hydra(cfg.output_dir, cfg)
     epoch_size = len(train_loader)
     n_parameters = sum(p.numel() for p in policy.parameters() if p.requires_grad)
     cfg.total_num_traj = dataset.replay_buffer.n_episodes
     policy_path = os.path.join(cfg.output_dir, "model.pth")
     print(f"Epoch size: {epoch_size} Traj: {cfg.total_num_traj} Train: {len(dataset)} Test: {len(val_dataset)}")
 
-    # 设置模型为训练模式
-    policy.train()
-
     pbar = trange(MAX_EPOCHS, position=0)
     for epoch in pbar:
-        # 确保在每个epoch开始时模型处于训练模式
-        policy.train()
+        # Train step
+        train_stats = train(cfg.log_interval, policy, device, train_loader, optimizer, scheduler, epoch)
+        train_steps = (epoch + 1) * len(train_loader)
         
-        for batch in train_loader:
-            # 确保所有张量都在同一设备上
-            batch["data"] = {k: v.to(device).float() for k, v in batch["data"].items()}
-            loss = policy.compute_loss(batch)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-        
-        scheduler.step()
-        wandb.log({"train/loss": loss.item(), "epoch": epoch})
-        print(f"Epoch {epoch} finished. Loss: {loss.item():.5f}")
-
+        # Test step
         if epoch % TEST_FREQ == 0:
-            # 切换到评估模式进行测试
-            policy.eval()
             test_loss = test(policy, device, test_loader, epoch)
-            wandb.log({"validate/epoch": epoch, f"validate/{domain_name}_test_loss": test_loss})
-            print(f"Epoch {epoch}. Test loss: {test_loss:.5f}")
-            # 测试完成后切换回训练模式
-            policy.train()
+            wandb.log({"validate/epoch": epoch, f"validate/{domain}_test_loss": test_loss})
+            
+        if "loss" in train_stats:
+            print(f"Steps: {train_steps}. Train loss: {train_stats['loss']:.5f}. Test loss: {test_loss:.5f}")
 
-        if (epoch + 1) % MODEL_SAVING_FREQ == 0:
-            # 保存模型时使用eval模式确保一致性
-            policy.eval()
-            torch.save(policy.state_dict(), policy_path)
-            print(f"Model saved to {policy_path}")
-            # 保存后切换回训练模式
-            policy.train()
+        # Save model
+        if epoch % MODEL_SAVING_FREQ == 0:
+            policy.save(policy_path)
+        
+        # Check if we should stop early
+        if train_steps > cfg.train.total_iters:
+            break
 
-        # if (epoch + 1) * len(train_loader) > cfg.train.total_iters:
-        #     break
-
-    # 6. Save final model
-    policy.eval()  # 最终保存时使用评估模式
-    torch.save(policy.state_dict(), policy_path)
-    print("Training completed. Model saved.")
-
+    # 6. Save final model and finish
+    policy.save(policy_path)
+    print("model saved to :", policy_path)
+    utils.save_args_hydra(cfg.output_dir, cfg)
+    pbar.close()
     run.finish()
+    wandb.finish()
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,5 @@
-seed: 0  # random seed
-output_dir: ./output/hpt_train  # output directory
+seed: 42  # random seed
+output_dir: ./output/hpt_train # output directory
 domains: Robotwin  # domains to train on
 wb_tag: "hpt_exp"  # wandb tag
 log_interval: 10  # how many steps before logging to wandb
@@ -20,9 +20,9 @@ dataset:
   val_ratio: 0.1  # 训练/验证集比例
   pad_after: 0  # episode 后填充
   episode_cnt: ${episode_num}  # 总 episode 数
-  step_cnt: 100000  # 总数据步数
+  step_cnt: 32000 # 总数据步数
   data_augmentation: False  # 是否数据增强
-  use_disk: False  # 是否用磁盘存储数据
+  use_disk: True  # 是否用磁盘存储数据
   pad_before: 0  # episode 前填充
   data_ratio: 1  # 只用部分数据
   action_horizon: 8  # 动作 horizon
@@ -58,7 +58,7 @@ network:
   use_modality_embedding: True # add trainable modality position tokens
   use_domain_embedding: False # whether to add domain-specific trainable parameters
   observation_horizon: ${dataset.horizon} # the observation history
-  action_horizon: 1 # open loop action steps. <= the dataset action horizons
+  action_horizon: 8 # open loop action steps. <= the dataset action horizons
   token_postprocessing: "mean" # maxpool or meanpool the tokens
   cross_stem_attention: True # use cross attention to combine state and action
   weight_init_style: 'pytorch' # weight init
@@ -102,7 +102,7 @@ stem:
 head:
   _target_: hpt.models.policy_head.MLP  # head 类
   input_dim: ${network.embed_dim}  # head 输入维度
-  tanh_end: True  # 是否归一化动作输出
+  tanh_end: False  # 是否归一化动作输出
   output_dim: 112  # 动作输出维度（需根据实际动作维度设置）
   widths: [256, 128]  # MLP 层宽度
   normalize_action: ${head.tanh_end}  # 是否归一化动作
@@ -110,16 +110,16 @@ head:
 
 # 训练参数
 dataloader:
-  batch_size: 256  # 训练 batch 大小
-  num_workers: 1  # dataloader worker 数
+  batch_size: 128  # 训练 batch 大小
+  num_workers: 4  # dataloader worker 数
   pin_memory: True  # 是否 pin memory
   persistent_workers: True  # 是否持久化 worker
   shuffle: True  # 是否打乱数据
   drop_last: False  # 是否丢弃最后一个 batch
 
 val_dataloader:
-  batch_size: 256  # validation batch size
-  num_workers: 1  # validation dataloader worker number
+  batch_size: 128  # validation batch size
+  num_workers: 4  # validation dataloader worker number
   shuffle: False  # do not shuffle validation set
   pin_memory: True  # whether to use pin memory
   persistent_workers: True  # whether to persist workers
@@ -139,9 +139,9 @@ lr_scheduler:
 # 训练流程参数
 train:
   total_epochs: 1000  # maximum training epochs before termination. usually set as maximum
-  total_iters: 20000 # maximum training steps before termination
-  epoch_iters: 2000  # training steps in each epoch
-  validation_iters: 100 # maximum iterations for validation
+  total_iters: 2000000 # maximum training steps before termination
+  epoch_iters: 1000  # training steps in each epoch
+  validation_iters: 350 # maximum iterations for validation
   pretrained_dir: "./hpt-xlarge" # pretrained model path for testing
   freeze_trunk: True # whether to freeze the trunk during finetuning
   wandb_pretrained_dir: "" # use models pretrained on wandb
@@ -155,4 +155,4 @@ warmup_lr:
   lr: 1e-10 # warmup initial learning rate
   step: 1000 # first 1000 iterations
 
-gpu_id: 6
+gpu_id: 4
