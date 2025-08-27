@@ -92,7 +92,7 @@ def convert_dataset_robotwin(task_name, task_config, episode_num):
         steps = []
         episode_length = left_gripper_all.shape[0]
         
-        for j in range(episode_length):
+        for j in range(episode_length - 1):
             left_gripper, left_arm, right_gripper, right_arm = (
                 left_gripper_all[j],
                 left_arm_all[j],
@@ -129,10 +129,21 @@ def convert_dataset_robotwin(task_name, task_config, episode_num):
                 observation["image2"] = camera_resized.astype(np.float32)
             
             
+            left_gripper, left_arm, right_gripper, right_arm = (
+                left_gripper_all[j+1],
+                left_arm_all[j+1],
+                right_gripper_all[j+1],
+                right_arm_all[j+1],
+            )
+            
+            # Concatenate joint states (similar to other policies)
+            action = np.concatenate((left_arm, [left_gripper], right_arm, [right_gripper]), axis=0)
+            action = action.astype(np.float32)
+
             # Create step dict (HPT format)
             step = OrderedDict({
                 "observation": observation,
-                "action": state.copy(),  # Use joint state as action for next step
+                "action": action,  # Use joint state as action for next step
             })
 
             # Only add language_instruction if it is not empty
